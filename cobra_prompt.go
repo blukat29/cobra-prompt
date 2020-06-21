@@ -13,17 +13,29 @@ import (
 type CobraPrompt struct {
 	RootCmd *cobra.Command
 
-	prompt       *prompt.Prompt
-	promptPrefix string
-	writer       prompt.ConsoleWriter
+	prompt             *prompt.Prompt
+	promptPrefix       string
+	writer             prompt.ConsoleWriter
+	flagValueCompleter FlagValueCompleter
 }
+
+type CompletionHint struct {
+	Cmd  *cobra.Command // Currently selected command
+	Flag *pflag.Flag    // Flag whose value is currently being typed
+	Args []string       // Whole command line
+	Prev string         // Previous word
+	Curr string         // Current word under the cursor
+}
+
+type FlagValueCompleter func(hint CompletionHint) []prompt.Suggest
 
 // New returns a new CobraPrompt based on given root command.
 func New(rootCmd *cobra.Command, opts ...prompt.Option) *CobraPrompt {
 	cp := &CobraPrompt{
-		RootCmd:      rootCmd,
-		promptPrefix: "> ",
-		writer:       &RawWriter{},
+		RootCmd:            rootCmd,
+		promptPrefix:       "> ",
+		writer:             &RawWriter{},
+		flagValueCompleter: defaultFlagValueCompleter,
 	}
 
 	opts = append(opts, prompt.OptionCompletionOnDown()) // github.com/c-bata/go-prompt@b6bf267 or later
@@ -73,8 +85,7 @@ func (cp *CobraPrompt) executor(in string) {
 // location.
 func (cp *CobraPrompt) completer(d prompt.Document) []prompt.Suggest {
 	items := []prompt.Suggest{}
-	words, last, curr := splitDocument(d)
-	_ = last
+	words, prev, curr := splitDocument(d)
 
 	// 1. Find current command
 	cmd := cp.RootCmd
@@ -83,13 +94,21 @@ func (cp *CobraPrompt) completer(d prompt.Document) []prompt.Suggest {
 		cmd = found
 	}
 
+	hint := CompletionHint{cmd, nil, words, prev, curr}
+
 	// 2. Add subcommands to suggestions
-	commandItems := suggestCommand(cmd, words, curr)
+	commandItems := cp.suggestCommand(hint)
 	items = append(items, commandItems...)
 
-	// 3. Add flags to suggestions
-	flagItems := suggestFlags(cmd, words, curr)
-	items = append(items, flagItems...)
+	// 3. Add flag values to suggestions
+	flagValueItems := cp.suggestFlagValue(hint)
+	items = append(items, flagValueItems...)
+
+	// 4. Add flags to suggestions, only if flag value suggestions are empty.
+	if len(flagValueItems) == 0 {
+		flagItems := cp.suggestFlag(hint)
+		items = append(items, flagItems...)
+	}
 
 	return items
 }
@@ -99,13 +118,13 @@ func (cp *CobraPrompt) getPrefix() (prefix string, useLivePrefix bool) {
 	return cp.promptPrefix, true
 }
 
-func suggestCommand(cmd *cobra.Command, words []string, curr string) []prompt.Suggest {
+func (cp *CobraPrompt) suggestCommand(hint CompletionHint) []prompt.Suggest {
 	items := []prompt.Suggest{}
-	for _, c := range cmd.Commands() {
+	for _, c := range hint.Cmd.Commands() {
 		if !c.IsAvailableCommand() {
 			continue
 		}
-		if prefixMatches(c.Name(), curr) {
+		if prefixMatches(c.Name(), hint.Curr) {
 			items = append(items, prompt.Suggest{
 				Text:        c.Name(),
 				Description: c.Short})
@@ -114,7 +133,28 @@ func suggestCommand(cmd *cobra.Command, words []string, curr string) []prompt.Su
 	return items
 }
 
-func suggestFlags(cmd *cobra.Command, words []string, curr string) []prompt.Suggest {
+func (cp *CobraPrompt) suggestFlagValue(hint CompletionHint) []prompt.Suggest {
+	items := []prompt.Suggest{}
+
+	visit := func(f *pflag.Flag) {
+		if f.Hidden {
+			return
+		}
+		name := "--" + f.Name
+		shorthand := "-" + f.Shorthand
+		if name == hint.Prev || (f.Shorthand != "" && shorthand == hint.Prev) {
+			hint.Flag = f
+			valueItems := cp.flagValueCompleter(hint)
+			items = append(items, valueItems...)
+		}
+	}
+
+	hint.Cmd.LocalFlags().VisitAll(visit)
+	hint.Cmd.InheritedFlags().VisitAll(visit)
+	return items
+}
+
+func (cp *CobraPrompt) suggestFlag(hint CompletionHint) []prompt.Suggest {
 	items := []prompt.Suggest{}
 
 	visit := func(f *pflag.Flag) {
@@ -123,7 +163,7 @@ func suggestFlags(cmd *cobra.Command, words []string, curr string) []prompt.Sugg
 		}
 
 		name := "--" + f.Name
-		if prefixMatches(name, curr) {
+		if prefixMatches(name, hint.Curr) {
 			items = append(items, prompt.Suggest{
 				Text:        name,
 				Description: f.Usage})
@@ -131,7 +171,7 @@ func suggestFlags(cmd *cobra.Command, words []string, curr string) []prompt.Sugg
 
 		if f.Shorthand != "" {
 			shorthand := "-" + f.Shorthand
-			if prefixMatches(shorthand, curr) {
+			if prefixMatches(shorthand, hint.Curr) {
 				items = append(items, prompt.Suggest{
 					Text:        shorthand,
 					Description: f.Usage})
@@ -139,8 +179,8 @@ func suggestFlags(cmd *cobra.Command, words []string, curr string) []prompt.Sugg
 		}
 	}
 
-	cmd.LocalFlags().VisitAll(visit)
-	cmd.InheritedFlags().VisitAll(visit)
+	hint.Cmd.LocalFlags().VisitAll(visit)
+	hint.Cmd.InheritedFlags().VisitAll(visit)
 	return items
 }
 
@@ -155,23 +195,25 @@ func splitString(in string) []string {
 	return words
 }
 
-func splitDocument(d prompt.Document) (words []string, last string, curr string) {
+func splitDocument(d prompt.Document) (words []string, prev string, curr string) {
 	words = splitString(d.Text)
 
 	if d.GetWordBeforeCursor() == "" {
 		// 1) cursor is at whitespace.
 		//        [info --name ]
 		//                    ^
+		//  => prev = "--name", curr = ""
 		if len(words) >= 1 {
-			last = words[len(words)-1]
+			prev = words[len(words)-1]
 		}
 		curr = ""
 	} else {
 		// 2) cursor is in the middle of a word.
 		//        [info --name abc]
 		//                       ^
+		//  => prev = "--name", curr = "abc"
 		if len(words) >= 2 {
-			last = words[len(words)-2]
+			prev = words[len(words)-2]
 		}
 		if len(words) >= 1 {
 			curr = words[len(words)-1]
@@ -192,5 +234,18 @@ func resetFlagValues(c *cobra.Command) {
 	})
 	for _, subcommand := range c.Commands() {
 		resetFlagValues(subcommand)
+	}
+}
+
+func defaultFlagValueCompleter(hint CompletionHint) []prompt.Suggest {
+	if hint.Flag.Value.Type() == "bool" {
+		return nil
+	} else {
+		return []prompt.Suggest{
+			prompt.Suggest{
+				Text:        hint.Flag.DefValue,
+				Description: "default value",
+			},
+		}
 	}
 }
