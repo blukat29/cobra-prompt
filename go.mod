@@ -3,7 +3,7 @@ module github.com/blukat29/cobra-prompt
 go 1.13
 
 require (
-	github.com/c-bata/go-prompt v0.2.3
+	github.com/c-bata/go-prompt v0.2.4-0.20200220073607-b6bf267a4ec2
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/logrusorgru/aurora v0.0.0-20200102142835-e9ef32dff381
 	github.com/mattn/go-runewidth v0.0.9 // indirect

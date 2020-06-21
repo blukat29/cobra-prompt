@@ -26,6 +26,7 @@ func New(rootCmd *cobra.Command, opts ...prompt.Option) *CobraPrompt {
 		writer:       &RawWriter{},
 	}
 
+	opts = append(opts, prompt.OptionCompletionOnDown()) // github.com/c-bata/go-prompt@b6bf267 or later
 	opts = append(opts, prompt.OptionLivePrefix(cp.getPrefix))
 	opts = append(opts, prompt.OptionShowCompletionAtStart())
 	opts = append(opts, prompt.OptionWriter(cp.writer))
