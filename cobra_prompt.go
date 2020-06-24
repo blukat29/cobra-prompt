@@ -68,6 +68,10 @@ func (cp *CobraPrompt) SetPromptPrefix(prefix string) {
 	cp.promptPrefix = prefix
 }
 
+func (cp *CobraPrompt) SetFlagValueCompleter(flagValueCompleter FlagValueCompleter) {
+	cp.flagValueCompleter = flagValueCompleter
+}
+
 // executor executes a command from given input line.
 func (cp *CobraPrompt) executor(in string) {
 	words := splitString(in)

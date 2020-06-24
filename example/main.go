@@ -4,6 +4,7 @@ import (
 	"os"
 
 	cobraprompt "github.com/blukat29/cobra-prompt"
+	"github.com/c-bata/go-prompt"
 	"github.com/spf13/cobra"
 )
 
@@ -32,8 +33,22 @@ func quitFunc(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func completer(hint cobraprompt.CompletionHint) []prompt.Suggest {
+	if hint.Flag.Name == "color" {
+		return []prompt.Suggest{
+			prompt.Suggest{Text: "green", Description: "young apple"},
+			prompt.Suggest{Text: "red", Description: "ripen apple"},
+		}
+	} else {
+		return nil
+	}
+}
+
 func main() {
-	cp := cobraprompt.New(newRootCommand())
+	rootCmd := newRootCommand()
+	cp := cobraprompt.New(rootCmd)
+
 	cp.SetPromptPrefix(">> ")
+	cp.SetFlagValueCompleter(completer)
 	cp.Run()
 }
